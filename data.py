@@ -740,7 +740,7 @@ def add_mult(x_train):
   return x_trainm
 
 comb_table={}
-combs=list(itertools.combinations(np.arange(9),2))#+list(itertools.combinations(np.arange(9),1))
+combs=list(itertools.combinations(np.arange(7),2))#+list(itertools.combinations(np.arange(9),1))
 for i in range(len(combs)):
   comb_table[combs[i]]=i
 

@@ -4,9 +4,7 @@ import numpy as np
 import georinex as gr 
 import xarray as xr
 import numpy as np
-import constants
 from lda_print import print_lambda
-import coordinates
 import cvxpy as cp
 import scipy
 import data
@@ -101,7 +99,6 @@ def float_solution(y,A,B):
     Qi=np.linalg.inv(Q)
     Qhat=np.linalg.inv(np.dot(H.T,np.dot(Qi,H)))
     xhat=np.dot(Qhat,np.dot(H.T,np.dot(Qi,y)))
-    #xhat=np.linalg.solve(np.dot(H.T,np.dot(Qi,H)),np.dot(H.T,np.dot(Qi,y)))
     return xhat,Qhat
 
 
@@ -163,30 +160,15 @@ def get_pos(eph,t,satIndex,flightTimes,svs):
     crs=eph['Crs'].values[satIndex,np.arange(len(svs))]
     cic=eph['Cic'].values[satIndex,np.arange(len(svs))]
     cis=eph['Cis'].values[satIndex,np.arange(len(svs))]
-    #a0=eph['SVclockBias'].values[satIndex,np.arange(len(svs))]
-    #a1=eph['SVclockDrift'].values[satIndex,np.arange(len(svs))]
-    #a2=eph['SVclockDriftRate'].values[satIndex,np.arange(len(svs))]
     tk=t-Toe-flightTimes
     tk+=604800*(-1*(tk>302400)+(tk<-302400))
     Mk=M0+(np.sqrt(mu)/sqrtA**3+dN)*tk
     Ek=kepler_solve(Mk,e)
-    #Ek=Mk+e*np.sin(Mk)
     nuk=np.arctan2(np.sqrt(1-e**2)*np.sin(Ek),(np.cos(Ek)-e))
     uk=w+nuk+cuc*np.cos(2*(w+nuk))+cus*np.sin(2*(w+nuk))
     rk=sqrtA**2*(1-e*np.cos(Ek))+crc*np.cos(2*(w+nuk))+crs*np.sin(2*(w+nuk))
     ik=i0+idot*tk+cic*np.cos(2*(w+nuk))+cis*np.sin(2*(w+nuk))
     ldak=omega0+(omegadot-we)*tk-we*Toe
-    '''
-    R3_lda=np.array([[np.cos(ldak),-np.sin(ldak),0],[np.sin(ldak),np.cos(ldak),0],[0,0,1]])
-    R1_i=np.array([[1,0,0],[0,np.cos(ik),-np.sin(ik)],[0,np.sin(ik),np.cos(ik)]])
-    R3_u=np.array([[np.cos(uk),-np.sin(uk),0],[np.sin(uk),np.cos(uk),0],[0,0,1]])
-    pos=np.array([rk,0,0])
-    pos=np.dot(R3_u,pos)
-    pos=np.dot(R1_i,pos)
-    pos=np.dot(R3_lda,pos)
-    '''
-    #print(rk)
-    #print(uk)
     xk=rk*np.cos(uk)
     yk=rk*np.sin(uk)
     x=xk*np.cos(ldak)-yk*np.sin(ldak)*np.cos(ik)
@@ -242,7 +224,6 @@ def full_solve(obs_ref,obs_rov,eph_rov,eph_ref,t_ind,x0=x0,lda=lda,f=1575.42*10*
     dd=compute_dd(sd)
     dd=dd-N_solve+N_trick
     G=np.concatenate(G,axis=0)
-    #y=np.concatenate((dd[5],dd[100]))
     y=np.reshape(dd[t_ind,:],(-1,))
     xhat,Qhat=float_solution(y,A,G)
     return xhat,Qhat,G,A,y,svs,dd
@@ -263,50 +244,3 @@ def apply_lambda(xhat,Qhat):
     print_lambda(ahat,Qahat)
     return ahat,Qahat
 
-def test_cvx_sol(y,A,B):
-    H=np.hstack((A,B))
-    Q=sigma(len(y))
-    Qi=np.linalg.inv(Q)
-    sQi=scipy.linalg.sqrtm(Qi)
-    xhat=cp.Variable(3,)
-    Nhat=cp.Variable(A.shape[1],integer=True)
-    x=cp.hstack([Nhat,xhat])
-    #obj=cp.Minimize((y-B @ xhat - A @ Nhat).T @ Qi @ (y-B @ xhat - A @ Nhat))
-    obj=cp.Minimize(cp.sum_squares(y-H@x))
-    prob=cp.Problem(obj)
-    prob.solve()
-    return xhat.value,Nhat.value
-
-def test_cvx(obs_ref,obs_rov,eph_rov,eph_ref,t_ind,x0=x0,lda=lda,f=1575.42*10**6,x=0.05,N_solve=0,N_trick=0):
-    sd,times,svs,obs_ref,obs_rov=compute_sd(obs_ref,obs_rov,0,max(t_ind)+1)
-    t0=times[t_ind[0]]
-    flightTimes,times=computeFlightTimes(times,svs,obs_ref,eph_ref)
-    eph_rov=eph_rov.sel(sv=svs)
-    eph_ref=eph_ref.sel(sv=svs)
-    satIndex=createSatIndex2(eph_ref,svs,t0)
-    G=[]
-    for t in t_ind:
-        G.append(compute_G(eph_ref,times[t],satIndex,flightTimes[t],svs))
-    n=len(svs)-1
-    m=len(t_ind)
-    A=np.zeros((m*n,n))
-    for i in range(m):
-        A[i*n:(i+1)*n,:]=np.eye(n)
-    dd=compute_dd(sd)
-    dd=dd-N_solve+N_trick
-    G=np.concatenate(G,axis=0)
-    #y=np.concatenate((dd[5],dd[100]))
-    y=np.reshape(dd[t_ind,:],(-1,))
-    xhat,Nhat=test_cvx_sol(y,A,G)
-    return xhat,Nhat
-
-def test_cvx2(ahat,Qahat):
-    N=cp.Variable(len(ahat),integer=True)
-    sq=scipy.linalg.sqrtm(Qahat)
-    c=sq @ (N-ahat)
-    o=cp.sum_squares(c)
-    obj=cp.Minimize(cp.sum_squares(c))
-    prob=cp.Problem(obj,[o<=10])
-    prob.solve()
-    return N.value
-#xhat,Qhat,G,A,y,svs,dd=full_solve(obs_ref,obs_rov,eph_rov,eph_ref,[5,10,15])
