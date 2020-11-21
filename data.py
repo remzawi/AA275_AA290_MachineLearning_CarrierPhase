@@ -4,7 +4,6 @@ import pickle
 import LAMBDA
 import itertools
 
-#base_std=np.array([0.00025,0.00037,0.0005]) #for one second interval, approx s(t)=t*base
 base_std=np.array([0.005,0.005,0.001])
 f=1575.42*10**6
 c=299792458
@@ -18,7 +17,6 @@ def float_sol(y,A,B,Qi):
   Qhat=np.linalg.inv(np.dot(H.T,np.dot(Qi,H)))
   Qhat=(Qhat+Qhat.T)/2
   xhat=np.dot(Qhat,np.dot(H.T,np.dot(Qi,y)))
-  #xhat=np.linalg.solve(np.dot(H.T,np.dot(Qi,H)),np.dot(H.T,np.dot(Qi,y)))
   return xhat,Qhat
 
 def compute_all_floats(n,y,B,Qi,add_zero=False):
@@ -34,7 +32,6 @@ def compute_all_floats(n,y,B,Qi,add_zero=False):
     xhat,Qhat=float_sol(y,A,B,Qi)
     xhats=np.concatenate((xhats,xhat))
     Qhats.append(Qhat.copy())
-
   return xhats,Qhats
   
 
@@ -93,12 +90,6 @@ def sigma_dd(n,f=1575.42*10**6,x=0.05):
     std=x*299792458/f
     Q=np.ones((n,n))+np.eye(n)
     return 2*std**2*Q
-
-def sigma_td(n,f=1575.42*10**6,x=0.05):
-    # Estimates carrier measurement noise as x cycles (default 0.05 cycles for double difference)
-    std=x*299792458/f
-    Q=-np.ones((n,n))+3*np.eye(n)
-    return 4*std**2*Q
 
 def gen_G(n_sat,max_angle=75*np.pi/180,lda=lda):
     z=np.random.uniform(np.cos(max_angle),1,n_sat)
@@ -255,34 +246,6 @@ class Dataset():
         self.xhats=None
         self.Qhats=None
         self.single_design=single_design
-    
-    @staticmethod
-    def isGZIP(filename):
-        if filename.split('.')[-1] == 'gz':
-            return True
-        return False
-
-    # Using HIGHEST_PROTOCOL is almost 2X faster and creates a file that
-    # is ~10% smaller.  Load times go down by a factor of about 3X.
-    def save(self, filename='Dataset.pkl'):
-        if self.isGZIP(filename):
-            f = gzip.open(filename, 'wb')
-        else:
-            f = open(filename, 'wb')
-        pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-        f.close()
-
-    # Note that loading to a string with pickle.loads is about 10% faster
-    # but probaly comsumes a lot more memory so we'll skip that for now.
-    @classmethod
-    def load(cls, filename='Dataset.pkl'):
-        if cls.isGZIP(filename):
-            f = gzip.open(filename, 'rb')
-        else:
-            f = open(filename, 'rb')
-        n = pickle.load(f)
-        f.close()
-        return n
 
     def prepare_data(self,normalize=True,classification=True,normalize_output_reg=False,add_Q=False,add_design=False,float_solution=False,relaxed=False,cheat=False):
         if add_Q:
@@ -380,7 +343,6 @@ class Dataset():
           self.lda=np.zeros_like(self.N)
           if self.Qi is None:
             self.compute_Q()
-          x_float
           A=compute_A(self.n,self.n_epochs,self.n_sat,single_design=False,N=None)
           for i in range(self.n):
             x,Q=float_sol(self.y[i],A[i],self.stacked_G[i],self.Qi)
@@ -396,37 +358,6 @@ class Dataset():
       if self.lda is None:
         self.compute_lambda()
       return np.sum((self.lda-self.N)**2)/self.n/(self.n_sat-1)
-
-    def prepare_lda_val(self):
-      if self.lda is None:
-        self.compute_lambda()
-      x_train=np.zeros((self.n,9*(self.n_sat-1)))
-      x_train[:,3*(self.n_sat-1):]=self.stacked_G.reshape((self.n,-1))
-      x_train[:,:2*(self.n_sat-1)]=self.y
-      x_train[:,2*(self.n_sat-1):3*(self.n_sat-1)]=self.lda
-      y_train=(np.sum(self.N!=self.lda,axis=1)>0).astype('float32')
-      return x_train,y_train
-
-    def prepare_lda_val2(self):
-      if self.lda is None:
-        self.compute_lambda()
-      x_train=np.zeros((self.n,self.n_sat+2))
-      x_train[:,:self.n_sat-1]=self.y[:,:self.n_sat-1]
-      y_c=self.y[:,:self.n_sat-1]-self.lda
-      for i in range(self.n):
-        x_train[i,-3:]=np.dot(np.linalg.pinv(self.G[i]),y_c[i])
-      y_train=(np.sum(self.N!=self.lda,axis=1)>0).astype('float32')
-      return x_train,y_train
-
-    def prepare_lda_val3(self):
-      if self.lda is None:
-        self.compute_lambda()
-      x_train=np.zeros((self.n,4*(self.n_sat-1)))
-      y_c=self.y[:,:self.n_sat-1]-self.lda
-      x_train[:,:self.n_sat-1]=y_c
-      x_train[:,self.n_sat-1:]=self.G.reshape((self.n,-1))
-      y_train=(np.sum(self.N!=self.lda,axis=1)>0).astype('float32')
-      return x_train,y_train
 
     def prepare_conv(self,reg=False,relaxed=False):
       x_train=np.zeros(((self.n,self.n_sat-1,4,2)))
@@ -455,111 +386,6 @@ class Dataset():
         y_train[i,np.arange(self.n_sat-1),N_q[i]]=1
       return y_train
 
-    def great_cheat(self,classification=True,relaxed=False):
-      x_train=np.zeros((self.n,2*(self.n_sat-1)))
-      for i in range(self.n):
-        x_train[i]=self.y[i]-np.dot(self.stacked_G[i],self.dx[i])
-      if classification:
-            if relaxed:
-              y_train=self.relaxed_y()
-              return x_train,y_train
-            y_train=np.zeros((self.n,self.n_sat-1,self.int_range[1]-self.int_range[0]+1))
-            for i in range(self.n):
-                y_train[i,np.arange(self.n_sat-1),self.N[i]-self.int_range[0]]=1
-      else:
-          y_train=self.N
-      return x_train,y_train
-    def semi_cheat(self,classification=True,relaxed=False, with_G=False):
-      if not with_G:
-        x_train=np.zeros((self.n,2*(self.n_sat-1)))
-        noisy_dx=self.dx + np.random.normal(0,10,self.dx.shape)
-
-        for i in range(self.n):
-          x_train[i]=self.y[i]-np.dot(self.stacked_G[i],noisy_dx[i])
-      else:
-        x_train=np.zeros((self.n,8*(self.n_sat-1)))
-        noisy_dx=self.dx + np.random.normal(0,10,self.dx.shape)
-
-        for i in range(self.n):
-          x_train[i,:2*self.n_sat-2]=self.y[i]-np.dot(self.stacked_G[i],noisy_dx[i])
-        x_train[:,2*(self.n_sat-1):]=self.stacked_G.reshape((self.n,-1))  
-      if classification:
-            if relaxed:
-              y_train=self.relaxed_y()
-              return x_train,y_train
-            y_train=np.zeros((self.n,self.n_sat-1,self.int_range[1]-self.int_range[0]+1))
-            for i in range(self.n):
-                y_train[i,np.arange(self.n_sat-1),self.N[i]-self.int_range[0]]=1
-      else:
-          y_train=self.N
-      return x_train,y_train
-
-    def floatx(self,classification=True,relaxed=False):
-      x_train=np.zeros((self.n,2*self.n_sat-2))
-      if self.x_float is None:
-        self.compute_float()
-      for i in range(self.n):
-        x_train[i]=self.y[i]-np.dot(self.stacked_G[i],self.x_float[i,-3:])
-      if classification:
-              if relaxed:
-                y_train=self.relaxed_y()
-                return x_train,y_train
-              y_train=np.zeros((self.n,self.n_sat-1,self.int_range[1]-self.int_range[0]+1))
-              for i in range(self.n):
-                  y_train[i,np.arange(self.n_sat-1),self.N[i]-self.int_range[0]]=1
-      else:
-          y_train=self.N
-      return x_train,y_train
-
-
-    def floatx_withy(self,classification=True,relaxed=False): 
-      x_train=np.zeros((self.n,3*self.n_sat+(self.n_sat+2)*(self.n_sat+3)//2))
-      if self.x_float is None:
-        self.compute_float()
-      if self.Qh is None:
-        self.compute_design()
-      x_train[:,:2*(self.n_sat-1)]=self.y
-      x_train[:,2*(self.n_sat-1):-(self.n_sat+2)*(self.n_sat+3)//2]=self.x_float
-      for i in range(self.n):
-        Q=self.Qh[i]
-        x_train[i,-(self.n_sat+2)*(self.n_sat+3)//2:]=Q[np.triu_indices(self.n_sat+2)]
-
-      if classification:
-              if relaxed:
-                y_train=self.relaxed_y()
-                return x_train,y_train
-              y_train=np.zeros((self.n,self.n_sat-1,self.int_range[1]-self.int_range[0]+1))
-              for i in range(self.n):
-                  y_train[i,np.arange(self.n_sat-1),self.N[i]-self.int_range[0]]=1
-      else:
-          y_train=self.N
-      return x_train,y_train
-
-    def with_invg(self,classification=True,relaxed=False):
-      x_train=np.zeros((self.n,14*self.n_sat-14))
-      x_train[:,:2*self.n_sat-2]=self.y
-      x_train[:,2*self.n_sat-2:8*self.n_sat-8]=self.stacked_G.reshape((self.n,-1))
-      for i in range(self.n):
-        x_train[i,8*self.n_sat-8:11*self.n_sat-11]=np.linalg.pinv(self.G[i]).reshape((-1,))
-        x_train[i,11*self.n_sat-11:14*self.n_sat-14]=np.linalg.pinv(self.G[i]+self.dg[i]).reshape((-1,))
-      if classification:
-              if relaxed:
-                y_train=self.relaxed_y()
-                return x_train,y_train
-              y_train=np.zeros((self.n,self.n_sat-1,self.int_range[1]-self.int_range[0]+1))
-              for i in range(self.n):
-                  y_train[i,np.arange(self.n_sat-1),self.N[i]-self.int_range[0]]=1
-      else:
-          y_train=self.N
-      return x_train,y_train
-
-    def new_reg(self):
-      x_train=np.zeros((self.n,8*(self.n_sat-1)))
-      x_train[:,:2*self.n_sat-2]=self.y
-      for i in range(self.n):
-        x_train[i,2*self.n_sat-2:8*self.n_sat-8]=np.linalg.pinv(self.stacked_G[i]).reshape((-1,))
-      return x_train,self.dx
-
     def allinone(self,classification=True,relaxed=False):
       if self.x_float is None:
         self.compute_float()
@@ -585,52 +411,6 @@ class Dataset():
       else:
           y_train=self.N
       return x_train,y_train
-
-    def new_float(self,classification=True,relaxed=False):
-      if self.x_float is None:
-        self.compute_float()
-      if self.Qh is None:
-        self.compute_design()
-      m=self.x_float.shape[1]
-      k=self.Qh.shape[1]
-      k2=k*(k+1)//2
-      l=self.n_sat-1
-      x_train=np.zeros((self.n,8*l+m+k2))
-      x_train[:,:2*l]=self.y
-      x_train[:,2*l:8*l]=self.stacked_G.reshape((self.n,-1))
-      x_train[:,8*l:8*l+m]=self.x_float
-      for i in range(self.n):
-        Q=self.Qh[i]
-        x_train[i,-k2:]=Q[np.triu_indices(k)]
-      if classification:
-              if relaxed:
-                y_train=self.relaxed_y()
-                return x_train,y_train
-              y_train=np.zeros((self.n,self.n_sat-1,self.int_range[1]-self.int_range[0]+1))
-              for i in range(self.n):
-                  y_train[i,np.arange(self.n_sat-1),self.N[i]-self.int_range[0]]=1
-      else:
-          y_train=self.N
-      return x_train,y_train
-      
-
-
-
-
-    def reg_test(self):
-        x_train=np.zeros((self.n,8*(self.n_sat-1)))
-        x_train[:,:2*(self.n_sat-1)]=self.y
-        x_train[:,2*(self.n_sat-1):]=self.stacked_G.reshape((self.n,-1))
-        y_train=np.zeros((self.n,self.n_sat+2))
-        y_train[:,:self.n_sat-1]=self.N
-        y_train[:,-3:]=self.dx
-        return x_train,y_train
-    
-    def from_x(self,x):
-      x_train=np.zeros((self.n,2*self.n_sat-2))
-      for i in range(self.n):
-        x_train[i]=self.y[i]-np.dot(self.stacked_G[i],x[i])
-      return x_train
 
     def conv_multiepoch(self,classification=True,relaxed=False):
       x_train=np.zeros(((self.n,self.n_sat-1,6+self.n_sat,1+self.n_epochs)))
@@ -666,10 +446,7 @@ class Dataset():
         Qhats2=np.array([])
         for j in range(len(Qhats)):
           Qhats2=np.concatenate((Qhats2,Qhats[j][np.triu_indices(len(Qhats[j]))].reshape(-1,)))
-        #Qhats2=np.array(Qhats2)
-        #print(Qhats2)
         x_train_i=np.concatenate((xhats,Qhats2))
-        #x_train_i=xhats.reshape(-1,)
         x_train.append(x_train_i)
       x_train=np.array(x_train)
       if relaxed:
@@ -692,10 +469,7 @@ class Dataset():
           y=self.y[i].copy()
           y=np.delete(y,[j,j+self.n_sat-1])
           G=self.stacked_G[i].copy()
-          #print(G.shape)
           G=np.delete(G,[j,j+self.n_sat-1],axis=0)
-          #print(G.shape)
-          #x_train_i.append(np.dot(np.linalg.pinv(G),y))
           x,Q=float_sol(y,None,G,Qi)
           x_train_i.append(np.concatenate([x,Q.reshape(-1,)]))
         x_train_i=np.array(x_train_i)
@@ -708,11 +482,7 @@ class Dataset():
       for i in range(self.n):
         y_train[i,np.arange(self.n_sat-1),self.N[i]-self.int_range[0]]=1
       return x_train,y_train
-      
-
-        
-
-
+    
 
 def normalize(x_train,group=None):
   if group is None:

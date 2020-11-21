@@ -52,42 +52,6 @@ class noise_layer(tf.keras.layers.Layer):
         return config
 
 
-def get_centralized_gradients(optimizer, loss, params):
-    """Compute a list of centralized gradients.
-    
-    Modified version of tf.keras.optimizers.Optimizer.get_gradients:
-    https://github.com/keras-team/keras/blob/1931e2186843ad3ca2507a3b16cb09a7a3db5285/keras/optimizers.py#L88-L101
-    Reference:
-        https://arxiv.org/pdf/2004.01461.pdf
-    """
-    grads = []
-    for grad in K.gradients(loss, params):
-        rank = len(grad.shape)
-        if rank > 1:
-            grad -= tf.reduce_mean(grad, axis=list(range(rank-1)), keep_dims=True)
-        grads.append(grad)
-    if None in grads:
-        raise ValueError('An operation has `None` for gradient. '
-                         'Please make sure that all of your ops have a '
-                         'gradient defined (i.e. are differentiable). '
-                         'Common ops without gradient: '
-                         'K.argmax, K.round, K.eval.')
-    if hasattr(optimizer, 'clipnorm') and optimizer.clipnorm > 0:
-        norm = K.sqrt(sum([K.sum(K.square(g)) for g in grads]))
-        grads = [tf.keras.optimizers.clip_norm(g, optimizer.clipnorm, norm) for g in grads]
-    if hasattr(optimizer, 'clipvalue') and optimizer.clipvalue > 0:
-        grads = [K.clip(g, -optimizer.clipvalue, optimizer.clipvalue) for g in grads]
-    return grads
-
-def get_centralized_gradients_function(optimizer):
-    """Produce a get_centralized_gradients function for a particular optimizer instance."""
-
-    def get_centralized_gradients_for_instance(loss, params):
-        return get_centralized_gradients(optimizer, loss, params)
-
-    return get_centralized_gradients_for_instance
-
-
 def FCModel_reg(hidden_sizes,non_norm_layer_size,output_size=10,use_BN=False,use_dropout=0.0):
     model = tf.keras.Sequential()
     for hidden_size in hidden_sizes:
@@ -99,11 +63,7 @@ def FCModel_reg(hidden_sizes,non_norm_layer_size,output_size=10,use_BN=False,use
     if non_norm_layer_size>0:
         model.add(Dense(non_norm_layer_size,activation='relu'))
     model.add(Dense(output_size,activation='linear'))
-    radam = RectifiedAdam()
-    ranger = Lookahead(radam, sync_period=6, slow_step_size=0.5)
-    ranger.get_gradients=get_centralized_gradients_function(ranger)
-
-    model.compile(optimizer=ranger,loss='mse')
+    model.compile(optimizer='adam',loss='mse')
     return model
 
 
@@ -147,9 +107,6 @@ def conv_reg(hidden_sizes, output_size):
         model.add(Dense(hidden_size,activation=mish,kernel_regularizer=tf.keras.regularizers.l1(0.001)))
         model.add(BatchNormalization())
     model.add(Dense(output_size,activation='linear'))
-    radam = RectifiedAdam()
-    ranger = Lookahead(radam, sync_period=6, slow_step_size=0.5)
-    ranger.get_gradients=get_centralized_gradients_function(ranger)
     model.compile(optimizer='adam',loss='mse')
     return model
 
@@ -169,9 +126,6 @@ def MO_model(init_sizes,end_sizes,output_size,n_branches,input_shape=(80,),use_B
         out_branch=end_branch(end_sizes,output_size,use_BN,act)
         outputs.append(out_branch(init_out))
     model=tf.keras.Model(inputs,outputs)
-    radam = RectifiedAdam()
-    ranger = Lookahead(radam, sync_period=6, slow_step_size=0.5)
-    ranger.get_gradients=get_centralized_gradients_function(ranger)
     model.compile(optimizer='adam',loss=['categorical_crossentropy' for i in range(n_branches)],metrics=['acc'])
     return model
 
@@ -184,9 +138,6 @@ def convMO_model(end_sizes,output_size,n_branches,input_shape=(6,4,2,),use_BN=Fa
         out_branch=end_branch(end_sizes,output_size,use_BN)
         outputs.append(out_branch(init_out))
     model=tf.keras.Model(inputs,outputs)
-    radam = RectifiedAdam()
-    ranger = Lookahead(radam, sync_period=6, slow_step_size=0.5)
-    ranger.get_gradients=get_centralized_gradients_function(ranger)
-    model.compile(optimizer=ranger,loss=['categorical_crossentropy' for i in range(n_branches)],metrics=['acc'])    
+    model.compile(optimizer='adam',loss=['categorical_crossentropy' for i in range(n_branches)],metrics=['acc'])    
     return model
 
